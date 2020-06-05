@@ -15,31 +15,38 @@ import progress_bar
 def read_maps(maps_path):
 	maps = []
 	with open(maps_path, "r") as f:
+		# read until "beatmaps:" is reached
 		while (line := f.readline().strip()) != "beatmaps:":
 			pass
+		# list of rest of file
 		maps = f.readlines()
-	return map(int, maps)
+
+		# not very good but it works for now
+
+	# set of ints representing map_ids
+	return set(map(int, maps))
 
 
 def read_downloaded_maps(map_ids, directory):
+	if not os.path.isdir(directory):
+		return
+
+	# slowly iterates through downloads directory
 	for f in os.listdir(directory):
 		map_id = f.split()[0]
-		if not isdigit(map_id):
-			continuecommit 
-		map_ids.remove(int(map_id))
+		if not map_id.isdigit():
+			continue
+		map_ids.discard(int(map_id))
 
 
 def request_home(s):
 	return s.get("https://osu.ppy.sh/home")
 
 
-def request_login(s, token):
+def request_login(s):
 	url = "https://osu.ppy.sh/session"
-	data = {"_token": token,
-		"username": input("username: "),
-		"password": getpass.getpass(prompt="password: "),
-		}
-
+	data = {"username": input("username: "),
+			"password": getpass.getpass(prompt="password: ")}
 	# dont know why this is required
 	# otherwise error 403
 	headers = {"Referer": "https://osu.ppy.sh/home"}
@@ -48,6 +55,7 @@ def request_login(s, token):
 
 
 def check_quota(s):
+	# represents number of maps downloaded in past hour
 	try:
 		q = s.get("https://osu.ppy.sh/home/download-quota-check")
 		return q.json()["quota_used"]
@@ -55,48 +63,92 @@ def check_quota(s):
 		return 0
 
 
-def download_maps(s, map_ids, directory):
-	progress = [0, len(map_ids)]
+def download_maps(s, map_ids, directory, maximum=170, wait_per_5=60):
+	# progress[0] : number of maps downloaded
+	# progress[1] : total amount of maps to download
+	progress = [0, min(len(map_ids), maximum)]
+
 	for map_id in map_ids:
+		quota = check_quota(s)
+
 		progress[0] += 1
-		progress_bar.print_progress_bar(*progress)
-		while not check_quota(s) > 0:
-			time.sleep(2)
-		download_map(s, map_id, directory)
+		prefix = f"q: {quota} d: {progress[0]}"
+		progress_bar.print_progress_bar(*progress, prefix=prefix)
+		if progress[0] >= progress[1]: break
+
+		# https://github.com/Piotrekol/CollectionManager/issues/15
+		# throttle downloads
+		if progress[0] % 5 == 0:
+			print(f"\r{prefix} | waiting {wait_per_5}s...", end="\r")
+			time.sleep(wait_per_5)
+
+		# wait for quota to refill
+		# this doesnt work idk y
+		#if progress[0] > 170:
+		#	print(f"\rq: {quota}, waiting {wait_per_5}s...", end="\r")
+		#	time.sleep(wait_per_5*10)
+
+		if not download_map(s, map_id, directory):
+			print(f"\nmap {map_id} does not exist")
+			os.mkdir(f"{directory}{os.path.sep}{map_id}")
 
 
 def download_map(s, map_id, d):
+	# try bancho first
+	# if bancho fails, then try bloodcat
 	return bancho_download(s, map_id, d) or bloodcat_download(s, map_id, d)
 
 
+def get_map_name(string):
+	regex = "filename\\s*=\\s*[\"'](.*)[\"'];"
+	result = re.search(regex, string)
+	if not result: return ""
+	return result.group(1)
+
+
+def write_map(d, filename, content):
+	# https://docs.microsoft.com/en-us/windows/win32/fileio/naming-a-file
+	# replace illegal characters with space for windows
+	name = re.sub('["*/:><?\\\|]', " ", filename)
+	with open(f"{d}{os.path.sep}{name}", "wb") as f:
+		f.write(content)
+
+
 def bancho_download(s, map_id, d):
-	# still dont know why this is required
 	url = f"https://osu.ppy.sh/beatmapsets/{map_id}/download"
+	
+	# still dont know why this is required
 	headers = {"Referer": f"https://osu.ppy.sh/beatmapsets/{map_id}"}
+	
 	download = s.get(url, headers=headers)
+	# copyrighted songs will give code 404, so (download.ok == False)
 	if not download.ok or "Content-Disposition" not in download.headers:
 		return False
 
-	regex = "filename\\s*=\\s*\"(.*)\""
-	result = re.search(regex, download.headers["Content-Disposition"])
-	if not result:
-		return False
+	filename = get_map_name(download.headers["Content-Disposition"])
+	if not filename: return False
 
-	with open(f"{d}{os.path.sep}{result.group(1)}", "wb") as f:
-		f.write(download.content)
+	write_map(d, filename, download.content)
 	return True
 
 
 def bloodcat_download(s, map_id, d):
 	url = f"https://bloodcat.com/osu/s/{map_id}"
+	
 	download = s.get(url)
 
-	if not len(download.content) > 330:
-		print(f"map {map_id} does not exist")
+	# if map does not exist
+	# then (download.content == b"* File not found or inaccessible!")
+	if (not len(download.content) > 40 or 
+		"Content-Disposition" not in download.headers):
 		return False
 
-	with open(f"{d}{os.path.sep}{lines[i].rstrip()}.osz", "wb") as f:
-		f.write(download.content)
+	# bloodcat gives quoted filename; must unquote
+	filename = requests.utils.unquote(
+		get_map_name(download.headers["Content-Disposition"]))
+	if not filename: return False
+
+	write_map(d, filename, download.content)
 	return True
 
 
@@ -108,15 +160,15 @@ def main(maps_path, directory):
 			s.close()
 			return
 
-		login = request_login(s, home.cookies["XSRF-TOKEN"])
-		if not home.ok or "XSRF-TOKEN" not in home.cookies:
+		login = request_login(s)
+		if not login.ok:
 			print(f"Error: status code {login.status_code}")
 			s.close()
 			return
 
-		map_ids = read_maps(maps_path, directory)
+		map_ids = read_maps(maps_path)
 		read_downloaded_maps(map_ids, directory)
-		download_maps(s, map_ids)
+		download_maps(s, map_ids, directory, maximum=50000)
 
 
 if __name__ == "__main__":
