@@ -9,10 +9,12 @@ import re
 import requests
 import sys
 import time
+import pickle
 import progress_bar
 
 
 def read_maps(maps_path):
+	"""for plaintext data, now replaced with read_save"""
 	maps = []
 	with open(maps_path, "r") as f:
 		# read until "beatmaps:" is reached
@@ -20,11 +22,17 @@ def read_maps(maps_path):
 			pass
 		# list of rest of file
 		maps = f.readlines()
-
 		# not very good but it works for now
 
 	# set of ints representing map_ids
 	return set(map(int, maps))
+
+
+def read_save(maps_path):
+	map_ids = set()
+	with open(maps_path, "rb") as p:
+		map_ids = pickle.load(p)["beatmaps_id"]
+	return map_ids
 
 
 def read_downloaded_maps(map_ids, directory):
@@ -55,7 +63,8 @@ def request_login(s):
 
 
 def check_quota(s):
-	# represents number of maps downloaded in past hour
+	# unused function; quota does not work like this
+	# https://osu.ppy.sh/beatmapsets/814033#osu/1714827
 	try:
 		q = s.get("https://osu.ppy.sh/home/download-quota-check")
 		return q.json()["quota_used"]
@@ -67,26 +76,21 @@ def download_maps(s, map_ids, directory, maximum=170, wait_per_5=60):
 	# progress[0] : number of maps downloaded
 	# progress[1] : total amount of maps to download
 	progress = [0, min(len(map_ids), maximum)]
+	print(f"downloading {progress[1]} maps")
 
 	for map_id in map_ids:
 		quota = check_quota(s)
 
 		progress[0] += 1
-		prefix = f"q: {quota} d: {progress[0]}"
+		prefix = f"d: {progress[0]}"
 		progress_bar.print_progress_bar(*progress, prefix=prefix)
 		if progress[0] >= progress[1]: break
 
 		# https://github.com/Piotrekol/CollectionManager/issues/15
 		# throttle downloads
 		if progress[0] % 5 == 0:
-			print(f"\r{prefix} | waiting {wait_per_5}s...", end="\r")
+			print(f"\r{prefix} | waiting {wait_per_5}s |", end="\r")
 			time.sleep(wait_per_5)
-
-		# wait for quota to refill
-		# this doesnt work idk y
-		#if progress[0] > 170:
-		#	print(f"\rq: {quota}, waiting {wait_per_5}s...", end="\r")
-		#	time.sleep(wait_per_5*10)
 
 		if not download_map(s, map_id, directory):
 			print(f"\nmap {map_id} does not exist")
@@ -152,7 +156,10 @@ def bloodcat_download(s, map_id, d):
 	return True
 
 
-def main(maps_path, directory):
+def main(maps_path, directory, downloaded_maps_path):
+	map_ids = read_save(maps_path) - read_save(downloaded_maps_path)
+	read_downloaded_maps(map_ids, directory)
+
 	with requests.session() as s:
 		home = request_home(s)
 		if not home.ok or "XSRF-TOKEN" not in home.cookies:
@@ -166,12 +173,14 @@ def main(maps_path, directory):
 			s.close()
 			return
 
-		map_ids = read_maps(maps_path)
-		read_downloaded_maps(map_ids, directory)
-		download_maps(s, map_ids, directory, maximum=50000)
+		download_maps(s, map_ids, directory, maximum=5000)
 
 
 if __name__ == "__main__":
-	maps_path = sys.argv[1] if len(sys.argv) > 1 else "data"
-	directory = sys.argv[2] if len(sys.argv) > 2 else "songs"
-	main(maps_path, directory)
+	if len(sys.argv) > 1 and "--help" in sys.argv:
+		print("download_maps.py <undownloaded_maps_path> <downloads_directory> <downloaded_maps_path>")
+	else:
+		maps_path = sys.argv[1] if len(sys.argv) > 1 else "data"
+		directory = sys.argv[2] if len(sys.argv) > 2 else "songs"
+		downloaded_maps_path = sys.argv[3] if len(sys.argv) > 3 else ""
+		main(maps_path, directory, downloaded_maps_path)

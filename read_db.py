@@ -149,7 +149,6 @@ def read_beatmap(f, osu_version):
 
 
 def read_database(path):
-	set_id = set()
 	data = {
 		"osu_version": None,
 		"folder_count": None,
@@ -158,6 +157,7 @@ def read_database(path):
 		"name": None,
 		"maps_amount": None,
 		"beatmaps": [],
+		"beatmaps_id": set(),
 		"permissions": None,
 	}
 
@@ -179,35 +179,44 @@ def read_database(path):
 		for m in range(data["maps_amount"]):
 			x = read_beatmap(f, data["osu_version"])
 			data["beatmaps"].append(x)
-			set_id.add(x["beatmap_set_ID"])
-			progressbar.print_progress_bar(m+1, data["maps_amount"])
+			data["beatmaps_id"].add(x["beatmap_set_ID"])
+			progress_bar.print_progress_bar(m+1, data["maps_amount"])
 
 		data["permissions"] = read_int(f)
 		print("permissions:", data["permissions"])
 
-	return data, set_id
+	return data
 
 
-def print_database(data, set_id):
-	with open(f'data-{"-".join(data["name"].split())}', "w") as f:
-		f.writelines([
-			f'osu_version: {data["osu_version"]}{os.linesep}',
-			f'folder_count: {data["folder_count"]}{os.linesep}',
-			f'account_unlocked: {data["account_unlocked"]}{os.linesep}',
-			f'date_time: {str(data["date_time"])}{os.linesep}',
-			f'name: {data["name"]}{os.linesep}',
-			f'maps_amount: {data["maps_amount"]}{os.linesep}',
-			f'permissions: {data["permissions"]}{os.linesep}',
-			f'beatmaps:{os.linesep}',
-		])
-		f.writelines([f'{m}{os.linesep}' for m in set_id])
+def print_database(data):
+	print(
+		f'osu_version: {data["osu_version"]}{os.linesep}' +
+		f'folder_count: {data["folder_count"]}{os.linesep}' +
+		f'account_unlocked: {data["account_unlocked"]}{os.linesep}' +
+		f'date_time: {str(data["date_time"])}{os.linesep}' +
+		f'name: {data["name"]}{os.linesep}' +
+		f'maps_amount: {data["maps_amount"]}{os.linesep}' +
+		f'permissions: {data["permissions"]}{os.linesep}' +
+		f'beatmaps:{os.linesep}' +
+		str(os.linesep).join(map(str, data["beatmaps_id"]))
+	)
 
 
-def main(path):
-	data, set_id = read_database(path)
-	print_database(data, set_id)
+def save_database(data, filename):
+	with open(filename, "wb") as p:
+		pickle.dump(data, p)
+
+
+def main(path, filename, print_db=False):
+	data = read_database(path)
+	if filename: save_database(data, filename)
+	if print_db: print_database(data)
 
 
 if __name__ == "__main__":
-	path = sys.argv[1] if len(sys.argv) > 1 else "osu!.db"
-	main(path)
+	if len(sys.argv) > 1 and "--help" in sys.argv:
+		print("read_db.py <path_of_osu!.db> <pickle_filename> <print_true_false>")
+	else:
+		path = sys.argv[1] if len(sys.argv) > 1 else "osu!.db"
+		filename = sys.argv[2] if len(sys.argv) > 2 else False
+		main(path, filename, print_db=(len(sys.argv) > 3 and sys.argv[3] == "true"))
