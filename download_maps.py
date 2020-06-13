@@ -79,18 +79,19 @@ def download_maps(s, map_ids, directory, maximum=170, wait_per_5=60):
 	print(f"downloading {progress[1]} maps")
 
 	for map_id in map_ids:
-		quota = check_quota(s)
+		# quota = check_quota(s)
 
 		progress[0] += 1
-		prefix = f"d: {progress[0]}"
-		progress_bar.print_progress_bar(*progress, prefix=prefix)
-		if progress[0] >= progress[1]: break
+		prefix = f"m: {map_id} d: {progress[0]}"
 
 		# https://github.com/Piotrekol/CollectionManager/issues/15
 		# throttle downloads
-		if progress[0] % 5 == 0:
-			print(f"\r{prefix} | waiting {wait_per_5}s |", end="\r")
-			time.sleep(wait_per_5)
+		#if progress[0] % 5 == 0:
+		#	print(f"\r{prefix} | waiting {wait_per_5}s |", end="\r")
+		#	time.sleep(wait_per_5)
+
+		progress_bar.print_progress_bar(*progress, prefix=prefix)
+		if progress[0] >= progress[1]: break
 
 		if not download_map(s, map_id, directory):
 			print(f"\nmap {map_id} does not exist")
@@ -159,6 +160,7 @@ def bloodcat_download(s, map_id, d):
 def main(maps_path, directory, downloaded_maps_path):
 	map_ids = read_save(maps_path) - read_save(downloaded_maps_path)
 	read_downloaded_maps(map_ids, directory)
+	print(len(map_ids))
 
 	with requests.session() as s:
 		home = request_home(s)
@@ -173,7 +175,7 @@ def main(maps_path, directory, downloaded_maps_path):
 			s.close()
 			return
 
-		download_maps(s, map_ids, directory, maximum=5000)
+		download_maps(s, map_ids, directory, maximum=3000)
 
 
 if __name__ == "__main__":
