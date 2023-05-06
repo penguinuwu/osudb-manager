@@ -1,18 +1,39 @@
 #!/usr/bin/python
 
 """
-downloads osu maps
+This script parses through two pickle files outputted by read_db.py and downloads the difference.
+For the two pickle scripts, one is converted from an old osu!.db with maps you wish to recover, 
+and another from your current osu!.db make sure no duplicate maps are downloaded.
+
+Usage:
+
+	download_maps.py <path to reference_db_pickle> <path to current_db_pickle> <Path to download songs to (use '<path to osu!>\Songs' for convienience)
+
+Example:
+
+	python download_maps.py D:\Documents\old.pickle D:\osu!\Songs D:\Documents\current.pickle D:\osu!\Songs
+
+For further information, use the -h or --help flag
+
+WARNING:
+
+	Setting a timeout of lower than 60s will likely result in the osu website blocking your downloads. In which case, please wait until unblocked before re-running the script.
+	This can be checked by attempting to download maps manually form the website.
+
+	This program also caps the number of maps to be downloaded in any 1 run to 3000
+
 """
 import getpass
 import os
 import re
 import requests
-import sys
+# import sys
 import time
 import pickle
 import progress_bar
+import argparse
 
-
+global_timeout = 60
 def read_maps(maps_path):
 	"""for plaintext data, now replaced with read_save"""
 	maps = []
@@ -37,7 +58,7 @@ def read_save(maps_path):
 
 def read_downloaded_maps(map_ids, directory):
 	if not os.path.isdir(directory):
-		return
+		raise Exception("Directory does not exist")
 
 	# slowly iterates through downloads directory
 	for f in os.listdir(directory):
@@ -53,11 +74,12 @@ def request_home(s):
 
 def request_login(s):
 	url = "https://osu.ppy.sh/session"
-	data = {"username": input("username: "),
-			"password": getpass.getpass(prompt="password: ")}
+	data = {"_token": s.cookies["XSRF-TOKEN"],
+            "username": input("username: "),
+            "password": getpass.getpass(prompt="password: ")}
 	# dont know why this is required
 	# otherwise error 403
-	headers = {"Referer": "https://osu.ppy.sh/home"}
+	headers = {"Referer": "https://osu.ppy.sh/home", "Origin": "https://osu.ppy.sh"}
 
 	return s.post(url, data=data, headers=headers)
 
@@ -72,30 +94,30 @@ def check_quota(s):
 		return 0
 
 
-def download_maps(s, map_ids, directory, maximum=170, wait_per_5=60):
+def download_maps(s, map_ids, directory, maximum=170):
 	# progress[0] : number of maps downloaded
 	# progress[1] : total amount of maps to download
 	progress = [0, min(len(map_ids), maximum)]
-	print(f"downloading {progress[1]} maps")
+	print(f"Number of maps to be downloaded: {progress[1]}")
 
 	for map_id in map_ids:
 		# quota = check_quota(s)
-
 		progress[0] += 1
 		prefix = f"m: {map_id} d: {progress[0]}"
 
 		# https://github.com/Piotrekol/CollectionManager/issues/15
 		# throttle downloads
-		#if progress[0] % 5 == 0:
-		#	print(f"\r{prefix} | waiting {wait_per_5}s |", end="\r")
-		#	time.sleep(wait_per_5)
+		if progress[0] % 5 == 0:
+			print(f"\r{prefix} | waiting {timeout}s |", end="\r")
+			time.sleep(timeout)
 
 		progress_bar.print_progress_bar(*progress, prefix=prefix)
 		if progress[0] >= progress[1]: break
 
-		if not download_map(s, map_id, directory):
-			print(f"\nmap {map_id} does not exist")
-			os.mkdir(f"{directory}{os.path.sep}{map_id}")
+		dl_map_status = download_map(s, map_id, directory)
+
+		if not dl_map_status:
+			print(f"\nMap ID: {map_id} cannot be found")
 
 
 def download_map(s, map_id, d):
@@ -105,27 +127,33 @@ def download_map(s, map_id, d):
 
 
 def get_map_name(string):
-	regex = "filename\\s*=\\s*[\"'](.*)[\"'];"
-	result = re.search(regex, string)
+	# regex = "filename\\s*=\\s*[\"'](.*)[\"'];"
+	# result = re.search(regex, string)
+	result = re.findall(r'"(.*?)"', string)
 	if not result: return ""
-	return result.group(1)
+	return result[0]
 
 
 def write_map(d, filename, content):
 	# https://docs.microsoft.com/en-us/windows/win32/fileio/naming-a-file
 	# replace illegal characters with space for windows
+	print(f"Downloading {filename}")
 	name = re.sub('["*/:><?\\\|]', " ", filename)
 	with open(f"{d}{os.path.sep}{name}", "wb") as f:
 		f.write(content)
 
 
-def bancho_download(s, map_id, d):
+def bancho_download(session, map_id, d):
 	url = f"https://osu.ppy.sh/beatmapsets/{map_id}/download"
 	
 	# still dont know why this is required
-	headers = {"Referer": f"https://osu.ppy.sh/beatmapsets/{map_id}"}
-	
-	download = s.get(url, headers=headers)
+	headers = {"Referer": f"https://osu.ppy.sh/beatmapsets/{map_id}"
+	    		,"Path":  f"/beatmapsets/{map_id}/download"}
+
+	download = session.get(url, headers=headers)
+
+	if download.status_code == 429:
+		raise(Exception("Error: Rate limited. Please wait before re-running program."))
 	# copyrighted songs will give code 404, so (download.ok == False)
 	if not download.ok or "Content-Disposition" not in download.headers:
 		return False
@@ -138,51 +166,59 @@ def bancho_download(s, map_id, d):
 
 
 def bloodcat_download(s, map_id, d):
-	url = f"https://bloodcat.com/osu/s/{map_id}"
+	return False
+	# url = f"https://bloodcat.com/osu/s/{map_id}"
 	
-	download = s.get(url)
+	# download = s.get(url)
 
-	# if map does not exist
-	# then (download.content == b"* File not found or inaccessible!")
-	if (not len(download.content) > 40 or 
-		"Content-Disposition" not in download.headers):
-		return False
+	# # if map does not exist
+	# # then (download.content == b"* File not found or inaccessible!")
+	# if (not len(download.content) > 40 or 
+	# 	"Content-Disposition" not in download.headers):
+	# 	return False
 
-	# bloodcat gives quoted filename; must unquote
-	filename = requests.utils.unquote(
-		get_map_name(download.headers["Content-Disposition"]))
-	if not filename: return False
+	# # bloodcat gives quoted filename; must unquote
+	# filename = requests.utils.unquote(
+	# 	get_map_name(download.headers["Content-Disposition"]))
+	# if not filename: return False
 
-	write_map(d, filename, download.content)
-	return True
+	# write_map(d, filename, download.content)
+	# return True
 
 
 def main(maps_path, directory, downloaded_maps_path):
 	map_ids = read_save(maps_path) - read_save(downloaded_maps_path)
 	read_downloaded_maps(map_ids, directory)
-	print(len(map_ids))
+	print("Number of map IDs: " + str(len(map_ids)))
 
-	with requests.session() as s:
-		home = request_home(s)
+	with requests.session() as req:
+		home = request_home(req)
 		if not home.ok or "XSRF-TOKEN" not in home.cookies:
-			print(f"Error: status code {home.status_code}")
-			s.close()
+			print(f"HomeError: status code {home.status_code}")
+			req.close()
 			return
 
-		login = request_login(s)
+		login = request_login(req)
 		if not login.ok:
-			print(f"Error: status code {login.status_code}")
-			s.close()
+			print(f"Login Error: status code {login.status_code}")
+			req.close()
 			return
 
-		download_maps(s, map_ids, directory, maximum=3000)
+		download_maps(req, map_ids, directory, maximum=3000)
 
+
+def parse_args():
+	parser = argparse.ArgumentParser(description='Download osu files based on difference of given pickle files')
+
+	parser.add_argument("reference_pickl", type=str, help="Path to pickle file for maps to be downloaded", default="data")
+	parser.add_argument("current_pickl",help="Path to pickle file for maps already owned", default="")
+	parser.add_argument("downloads_dir", type=str, help="Path to where files will be downloaded (path to osu!\Songs)", default="D:\osu!\Songs")
+	parser.add_argument("--timeout", type=int, help="Duration to wait inbetween downloading every 5 maps", default=60)
+	args = parser.parse_args()
+	return args.reference_pickl, args.downloads_dir, args.current_pickl, args.timeout
 
 if __name__ == "__main__":
-	if len(sys.argv) > 1 and "--help" in sys.argv:
-		print("download_maps.py <undownloaded_maps_path> <downloads_directory> <downloaded_maps_path>")
-	else:
-		maps_path = sys.argv[1] if len(sys.argv) > 1 else "data"
-		directory = sys.argv[2] if len(sys.argv) > 2 else "songs"
-		downloaded_maps_path = sys.argv[3] if len(sys.argv) > 3 else ""
-		main(maps_path, directory, downloaded_maps_path)
+
+	reference_pickl, downloads_dir, current_pickl, timeout = parse_args()
+	global_timeout = timeout
+	main(reference_pickl, downloads_dir, current_pickl)

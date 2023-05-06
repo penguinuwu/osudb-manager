@@ -1,14 +1,22 @@
 #!/usr/bin/python
+"""
+This script parses through an osu!.db database file and converts it into a pickle file to be used in download_maps.py
+
+Usage:
+
+	read_db.py <path to osu!.db file> <Location of the output file (including name)>
+
+Example:
+
+	read_db.py D:\Apps\osu!\osu!.db D:\Documents\data\osu_pickle
+
+For further information, use the -h or --help flag
 
 """
-reads osu!.db
-"""
-import datetime
 import os
-import struct
-import sys
 import pickle
 import progress_bar
+import argparse
 
 
 def read_byte(f):
@@ -203,8 +211,19 @@ def print_database(data):
 
 
 def save_database(data, filename):
+	os.makedirs(os.path.dirname(filename), exist_ok=True)
 	with open(filename, "wb") as p:
 		pickle.dump(data, p)
+
+def parse_args():
+	parser = argparse.ArgumentParser(description='Convert osu!.db to pickle file')
+
+	parser.add_argument("osu_db", type=str, help="Path to osu!.db database file",)
+	parser.add_argument("output_file", type=str, help="Name of outputted pickle file",)
+	parser.add_argument("--print_contents",help="Print database contents")
+	args = parser.parse_args()
+	return args.osu_db, args.output_file, args.print_contents
+
 
 
 def main(path, filename, print_db=False):
@@ -214,9 +233,6 @@ def main(path, filename, print_db=False):
 
 
 if __name__ == "__main__":
-	if len(sys.argv) > 1 and "--help" in sys.argv:
-		print("read_db.py <path_of_osu!.db> <pickle_filename> <print_true_false>")
-	else:
-		path = sys.argv[1] if len(sys.argv) > 1 else "osu!.db"
-		filename = sys.argv[2] if len(sys.argv) > 2 else False
-		main(path, filename, print_db=(len(sys.argv) > 3 and sys.argv[3] == "true"))
+	
+	db_path, output_file, print_contents = parse_args()
+	main(db_path, output_file, print_contents)
